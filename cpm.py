@@ -16,6 +16,7 @@ from generator import (
     add_package_to_project,
     create_main_cpp,
     create_slint_ui,
+    create_sdl2_main,
     generate_makefile,
     load_project_config
 )
@@ -93,6 +94,9 @@ def command_install(stdscr, package_name):
     if package["package_type"] == "slint":
         create_main_cpp(project)
         create_slint_ui(project)
+
+    elif package["package_type"] == "sdl2":
+        create_sdl2_main(project)
 
     packages = load_project_packages(
         project
@@ -220,6 +224,10 @@ def curses_main(stdscr):
                 stdscr
             )
 
+        elif command == "clean":
+            command_clean(stdscr)
+
+
         else:
             raise RuntimeError(
                 f"Unbekannter Befehl: {command}"
@@ -239,6 +247,44 @@ def curses_main(stdscr):
 
         stdscr.getch()
 
+
+def command_clean(stdscr):
+    project = Path.cwd()
+
+    files = [
+        "Makefile",
+        "cpm.json",
+        "main.cpp",
+        "ui.slint",
+        "ui.h",
+        "app",
+        "app.exe",
+    ]
+
+    for name in files:
+        path = project / name
+
+        if path.exists():
+            path.unlink()
+
+    vendor = project / "vendor"
+
+    if vendor.exists():
+        import shutil
+        shutil.rmtree(vendor)
+
+    status(
+        stdscr,
+        "Projekt wurde bereinigt."
+    )
+
+    stdscr.addstr(
+        5,
+        2,
+        "Taste drücken."
+    )
+
+    stdscr.getch()
 
 def main():
     if len(sys.argv) == 2 and sys.argv[1] in (
