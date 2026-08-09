@@ -1,235 +1,257 @@
 #!/usr/bin/env python3
 
 import curses
-import json
-import os
-import shutil
-import tarfile
-import tempfile
-import urllib.request
+import sys
+
 from pathlib import Path
 
+from database import (
+    get_package,
+    list_packages
+)
 
-GITHUB_API = "https://api.github.com/repos/slint-ui/slint/releases/latest"
+from installer import install_package
+
+from generator import (
+    add_package_to_project,
+    create_main_cpp,
+    create_slint_ui,
+    generate_makefile,
+    load_project_config
+)
 
 
 def status(stdscr, text):
     stdscr.clear()
-    stdscr.addstr(1, 2, "CPM - C++ Package Manager")
-    stdscr.addstr(3, 2, text)
+
+    stdscr.addstr(
+        1,
+        2,
+        "CPM - C++ Package Manager"
+    )
+
+    stdscr.addstr(
+        3,
+        2,
+        text
+    )
+
     stdscr.refresh()
 
 
-def download(url, target):
-    request = urllib.request.Request(
-        url,
-        headers={"User-Agent": "cpm"}
-    )
+def load_project_packages(project):
+    config = load_project_config(project)
 
-    with urllib.request.urlopen(request) as response:
-        with open(target, "wb") as file:
-            shutil.copyfileobj(response, file)
+    packages = []
 
+    for name in config.get("packages", []):
+        package = get_package(name)
 
-def find_slint_asset():
-    request = urllib.request.Request(
-        GITHUB_API,
-        headers={
-            "User-Agent": "cpm",
-            "Accept": "application/vnd.github+json"
-        }
-    )
+        if package:
+            packages.append(package)
 
-    with urllib.request.urlopen(request) as response:
-        release = json.load(response)
-
-    for asset in release["assets"]:
-        name = asset["name"].lower()
-
-        if (
-            "cpp" in name
-            and "linux" in name
-            and "x86_64" in name
-            and name.endswith(".tar.gz")
-        ):
-            return (
-                asset["name"],
-                asset["browser_download_url"]
-            )
-
-    raise RuntimeError("Kein passendes Slint C++ SDK gefunden.")
+    return packages
 
 
-def find_directory(root, name):
-    for path in root.rglob(name):
-        if path.is_dir():
-            return path
-
-    return None
-
-
-def copy_directory(source, target):
-    target.mkdir(parents=True, exist_ok=True)
-    shutil.copytree(
-        source,
-        target,
-        dirs_exist_ok=True
-    )
-
-
-def create_main_cpp(project):
-    file = project / "main.cpp"
-
-    if file.exists():
-        return
-
-    file.write_text(
-'''#include "ui.h"
-
-int main()
-{
-    auto app = App::create();
-    app->run();
-
-    return 0;
-}
-'''
-    )
-
-
-def create_ui(project):
-    file = project / "ui.slint"
-
-    if file.exists():
-        return
-
-    file.write_text(
-'''export component App inherits Window {
-    width: 400px;
-    height: 240px;
-    title: "CPM Slint";
-
-    Text {
-        text: "Hallo aus C++!";
-        font-size: 28px;
-        horizontal-alignment: center;
-        vertical-alignment: center;
-    }
-}
-'''
-    )
-
-
-def create_makefile(project):
-    file = project / "Makefile"
-
-    if file.exists():
-        return
-
-    file.write_text(
-'''CXX := g++
-
-SLINT := vendor/slint
-SLINT_COMPILER := $(SLINT)/bin/slint-compiler
-
-CXXFLAGS := -std=c++20 -I$(SLINT)/include/slint
-LDFLAGS := -L$(SLINT)/lib -Wl,-rpath,'$$ORIGIN/$(SLINT)/lib' -lslint_cpp
-
-TARGET := app
-
-all: $(TARGET)
-
-ui.h: ui.slint
-\t$(SLINT_COMPILER) ui.slint -o ui.h
-
-$(TARGET): main.cpp ui.h
-\t$(CXX) $(CXXFLAGS) main.cpp -o $(TARGET) $(LDFLAGS)
-
-run: $(TARGET)
-\t./$(TARGET)
-
-clean:
-\trm -f $(TARGET) ui.h
-'''
-    )
-
-
-def install_slint(stdscr):
+def command_install(stdscr, package_name):
     project = Path.cwd()
-    destination = project / "vendor" / "slint"
 
-    status(stdscr, "Suche aktuellen Slint-Release ...")
+    package = get_package(
+        package_name
+    )
 
-    asset_name, asset_url = find_slint_asset()
-
-    status(stdscr, f"Lade {asset_name} ...")
-
-    with tempfile.TemporaryDirectory() as temp:
-        temp = Path(temp)
-
-        archive = temp / "slint.tar.gz"
-        extracted = temp / "extracted"
-
-        download(asset_url, archive)
-
-        status(stdscr, "Entpacke Slint ...")
-
-        extracted.mkdir()
-
-        with tarfile.open(archive, "r:gz") as tar:
-            tar.extractall(extracted)
-
-        bin_dir = find_directory(extracted, "bin")
-        include_dir = find_directory(extracted, "include")
-        lib_dir = find_directory(extracted, "lib")
-
-        if not bin_dir or not include_dir or not lib_dir:
-            raise RuntimeError(
-                "Slint SDK Struktur wurde nicht erkannt."
-            )
-
-        status(stdscr, "Kopiere Slint ins Projekt ...")
-
-        copy_directory(
-            bin_dir,
-            destination / "bin"
+    if not package:
+        status(
+            stdscr,
+            f"Unbekanntes Paket: {package_name}"
         )
 
-        copy_directory(
-            include_dir,
-            destination / "include"
+        stdscr.addstr(
+            5,
+            2,
+            "Taste drücken."
         )
 
-        copy_directory(
-            lib_dir,
-            destination / "lib"
-        )
+        stdscr.getch()
 
-    create_main_cpp(project)
-    create_ui(project)
-    create_makefile(project)
+        return
+
+    install_package(
+        package,
+        project,
+        lambda text: status(
+            stdscr,
+            text
+        )
+    )
+
+    add_package_to_project(
+        project,
+        package_name
+    )
+
+    if package["package_type"] == "slint":
+        create_main_cpp(project)
+        create_slint_ui(project)
+
+    packages = load_project_packages(
+        project
+    )
+
+    generate_makefile(
+        project,
+        packages
+    )
 
     status(
         stdscr,
-        "Slint installiert!  make  oder  make run"
+        f"{package_name} installiert."
     )
 
-    stdscr.addstr(5, 2, "Taste drücken zum Beenden.")
+    stdscr.addstr(
+        5,
+        2,
+        "Jetzt: make oder make run"
+    )
+
+    stdscr.addstr(
+        7,
+        2,
+        "Taste drücken."
+    )
+
     stdscr.refresh()
     stdscr.getch()
 
 
-def main(stdscr):
+def command_list(stdscr):
+    packages = list_packages()
+
+    stdscr.clear()
+
+    stdscr.addstr(
+        1,
+        2,
+        "CPM - verfügbare Pakete"
+    )
+
+    row = 3
+
+    for package in packages:
+        stdscr.addstr(
+            row,
+            4,
+            package["name"]
+        )
+
+        row += 1
+
+    stdscr.addstr(
+        row + 2,
+        2,
+        "Taste drücken."
+    )
+
+    stdscr.refresh()
+    stdscr.getch()
+
+
+def show_usage():
+    print(
+        """
+CPM - C++ Package Manager
+
+Benutzung:
+
+    cpm install <paket>
+    cpm list
+
+Beispiele:
+
+    cpm install slint
+    cpm list
+"""
+    )
+
+
+def curses_main(stdscr):
     curses.curs_set(0)
 
+    if len(sys.argv) < 2:
+        status(
+            stdscr,
+            "Kein Befehl angegeben."
+        )
+
+        stdscr.addstr(
+            5,
+            2,
+            "Benutze: cpm install slint"
+        )
+
+        stdscr.addstr(
+            7,
+            2,
+            "Taste drücken."
+        )
+
+        stdscr.getch()
+
+        return
+
+    command = sys.argv[1]
+
     try:
-        install_slint(stdscr)
+        if command == "install":
+            if len(sys.argv) < 3:
+                raise RuntimeError(
+                    "Paketname fehlt."
+                )
+
+            package_name = sys.argv[2]
+
+            command_install(
+                stdscr,
+                package_name
+            )
+
+        elif command == "list":
+            command_list(
+                stdscr
+            )
+
+        else:
+            raise RuntimeError(
+                f"Unbekannter Befehl: {command}"
+            )
 
     except Exception as error:
-        status(stdscr, f"FEHLER: {error}")
-        stdscr.addstr(5, 2, "Taste drücken.")
+        status(
+            stdscr,
+            f"FEHLER: {error}"
+        )
+
+        stdscr.addstr(
+            5,
+            2,
+            "Taste drücken."
+        )
+
         stdscr.getch()
 
 
+def main():
+    if len(sys.argv) == 2 and sys.argv[1] in (
+        "--help",
+        "-h"
+    ):
+        show_usage()
+        return
+
+    curses.wrapper(
+        curses_main
+    )
+
+
 if __name__ == "__main__":
-    curses.wrapper(main)
+    main()
